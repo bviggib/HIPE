@@ -1,20 +1,28 @@
 
 COLORS = {
+    # fig2_qpstd change start
     "fb_sobol": "dodgerblue",
     "fb_random": "purple",
     "nipv": "forestgreen",
+    "qPSTD": "teal",
+    "seq_PSTD_BALD": "steelblue",
     "hipe": "deeppink",
     "lhsbeta": "darkgoldenrod",
     "bald": "darkgoldenrod",
+    # fig2_qpstd change end
 }
 
 NAMES = {
+    # fig2_qpstd change start
     "hipe": "HIPE",
     "sobol": "Sobol",
     "random": "Random",
     "lhsbeta": "LHS-Beta",
     "nipv": "NIPV",
     "bald": "BALD",
+    "qPSTD": "qPSTD",
+    "seq_PSTD_BALD": "Seq qPSTD->BALD",
+    # fig2_qpstd change end
 }
 
 BENCHMARKS = {
@@ -47,9 +55,13 @@ BO_METHOD_ORDER = (
     "hipe",
 )
 AL_METHOD_ORDER = (
+    # fig2_qpstd change start
     "random",
     "sobol",
+    "qPSTD",
+    "seq_PSTD_BALD",
     "nipv",
     "bald",
     "hipe",
+    # fig2_qpstd change end
 )

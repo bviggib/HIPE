@@ -8,7 +8,12 @@ from json import JSONDecodeError
 import matplotlib.ticker as ticker
 import matplotlib as mpl
 from matplotlib.axes import Axes
-import seaborn as sns
+# fig2_qpstd change start
+try:
+    import seaborn as sns
+except ModuleNotFoundError:
+    sns = None
+# fig2_qpstd change end
 from experiments.constants import (
     COLORS, 
     NAMES, 
@@ -38,6 +43,7 @@ def plot_relative_ranking(all_regrets: dict, axes: Axes, maximize: bool = True, 
     #include_first = False
     method_ranks = defaultdict(list)
     rankings = []
+    #fix issue
     err_rankings = []
     for func, method_dict in all_regrets.items():
         methods = list(method_dict.keys())
@@ -66,16 +72,26 @@ def plot_relative_ranking(all_regrets: dict, axes: Axes, maximize: bool = True, 
         #print(methods)
         #np.save(f"ranks/lcbench_{func}_ranks.npz", ranks)
         avg_ranks = np.mean(ranks, axis=1)
+        #fix issue
+        err_ranks = np.std(ranks, axis=1) / np.sqrt(ranks.shape[1])
         ranks = ranks.reshape(-1, ranks.shape[-1])
-        err_ranks = np.std(ranks, axis=0) / np.sqrt(np.prod(ranks.shape[0]))
         #avg_ranks[..., 0] = len(methods) / 2 + 0.5
         # NOTE there seems to be a rounding error here, not sure why. Hardcoding rank at 0
         rankings.append(avg_ranks)
+        #fix issue
         err_rankings.append(err_ranks)
+    #fix issue
+    if not rankings:
+        #fix issue
+        print("Warning: No valid rankings available to plot.")
+        #fix issue
+        return
     
     # Compute average ranks across all functions
+    rankings = np.array(rankings)
     agg_ranks = np.mean(rankings, axis=0).T
-    err_ranks = np.array(err_rankings).T
+    #fix issue
+    err_ranks = np.mean(np.array(err_rankings), axis=0).T
     if not include_first:
         agg_ranks = agg_ranks[1:] 
         err_ranks = err_ranks[1:]
@@ -621,6 +637,13 @@ def plot_lengthscale_distributions_swarm(
         seeds (List[int]): List of seeds to aggregate over.
         output_file (str): Optional path to save the resulting plot.
     """
+    # fig2_qpstd change start
+    if sns is None:
+        raise ModuleNotFoundError(
+            "seaborn is required for plot_lengthscale_distributions_swarm. "
+            "Install it with `pip install seaborn`."
+        )
+    # fig2_qpstd change end
 
     if base_path[-1] == "/":
         base_path = base_path[:-1]

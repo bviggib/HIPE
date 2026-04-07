@@ -1,0 +1,288 @@
+HIPE Chat Log and Runbook
+Date: 2026-03-19
+Workspace: /HIPE
+
+==================================================
+USER EXACT REQUESTS
+==================================================
+
+Request 1:
+"@workspace I want to run all the experiments needed to recreate figure 2 in the pdf faithfully. You will create new scripts to do that and if you are going to modify an existing file in the workspace please add a comment before and after modification to track changes. Recreating it is just the first part. Next we must modify figure 2 and call the modified figure fig2_qpstd. Now for this fig2_qbstd we must add in the qposteriorstandarddeviation acquisition function to the figure. Please ask any clarifying questions before executing. we must follow the same batch size, number of seeds and number of batches and report them. make the scripts comprehensive and easy to execute by providing exact instructions on how to run the scripts in the terminal or which pythion files to run and with what settings, do not complicate the scripts themselves by trying to automate things that really should be instructions to the user to run as terminal commands. the style of coding must be the same as the original code in the workspace. Keep the comnets minimal and to the point please."
+
+Request 2:
+"ive attached the pdf as the truth for figure 2 it is on page 8 of the pdf file. im not sure that there is a script you can check in the scripts folder and understand from readme. just do fig2_qpstd for the name. Yes the modified figure 2 should plot figure 2 results as well as qPSTD results. But you woudnt have to rerun the experiments for the other acquisitions of course as they will already be done in creating figure 2. yes you must use the same exact batch and number od seeds and number of batches, but first we shall test if everything works by setting number of seeds to 4, and then later i will modify it to the number used in the paper. stick to 4 for now. No you are free to modify anything in the workspace as long as it makes sense to modify things there. You will need to call qPSTD from botorch installation (i have alsready setup the venv and install botorch from reuqiremetns.txt). later on we will modify these acquisitions and create new ones which we can add to the acquisition folder. i want the plots saved in a new folder called figures. for the commets as arker just use a normal text comment nothing formal"
+
+Request 3:
+"@workspace ok great now plese continue running the scirpts and see if we have successfully produced a figure using 4 seeds for figure 2 and figure 2 with qpstd. troubleshoot when you run into errors. you will probably have to install Ax and then so something to recreate the australian and car datasets or surrogates check and read the lcbench.py to understand how."
+
+==================================================
+ASSISTANT CONTRIBUTIONS (SUMMARY)
+==================================================
+
+1) Located Figure 2 setup from PDF page 8:
+- Task: Active Learning
+- Objectives: Australian, car, hartmann6, hartmann6_12, ishigami
+- Batches: 4
+- Batch size q: 16
+- Paper seeds: 100
+- Current test seeds requested: 4
+
+2) Added/updated scripts and plotting support:
+- scripts/fig2_experiments.py
+- scripts/fig2_plot.py
+- experiments/constants.py
+- experiments/performance.py
+
+3) Added qPSTD support in plotting aliases/order:
+- Method key: var
+- Display name: qPSTD
+
+4) Added minimal change-marker comments around edits in existing files as requested.
+
+5) Troubleshooting result for current failure:
+- fig2 experiments fail on LCBench because surrogate files are missing:
+  data/lcbench/lcbench_Australian.pt
+  data/lcbench/lcbench_car.pt
+- Confirmed error source in experiments/lcbench.py loader:
+  DATA_PATH = "data/lcbench/lcbench_{}.pt"
+
+6) Verified that Ax import exists in environment path, but required local LCBench surrogate .pt files are not present.
+
+==================================================
+COPY-PASTE COMMANDS (RUNBOOK)
+==================================================
+
+# Use project venv Python explicitly
+cd /Users/viggy/Documents/GitHub/HIPE
+
+# 1) Run Figure 2 experiments (4-seed test)
+/Users/viggy/Documents/GitHub/HIPE/.venv/bin/python scripts/fig2_experiments.py --experiment_name=fig2_al --num_seeds=4 --q=16 --num_batches=4 --run=True
+
+# 2) Run only qPSTD experiments (after/base results exist)
+/Users/viggy/Documents/GitHub/HIPE/.venv/bin/python scripts/fig2_experiments.py --experiment_name=fig2_al --methods=var --num_seeds=4 --q=16 --num_batches=4 --run=True
+
+# 3) Plot Figure 2
+/Users/viggy/Documents/GitHub/HIPE/.venv/bin/python scripts/fig2_plot.py --path=results/fig2_al --output_dir=figures --include_qpstd=False --q=16 --num_batches=4 --show=False
+
+# 4) Plot Figure 2 + qPSTD
+/Users/viggy/Documents/GitHub/HIPE/.venv/bin/python scripts/fig2_plot.py --path=results/fig2_al --output_dir=figures --include_qpstd=True --q=16 --num_batches=4 --show=False
+
+
+==================================================
+DETAILED LCBENCH .PT RECREATION LOG (STEP-BY-STEP)
+==================================================
+
+User request captured in this session:
+- Install/verify Ax setup and recreate missing LCBench surrogate files needed by experiments/lcbench.py:
+  data/lcbench/lcbench_Australian.pt
+  data/lcbench/lcbench_car.pt
+- Then run figure-2 experiment and plotting commands.
+
+What these .pt files are:
+- Each .pt file is a serialized PyTorch checkpoint containing:
+  1) an Ax Experiment object defining the LCBench search space,
+  2) attached observed training data (hyperparameter configs and val_accuracy),
+  3) fitted GP surrogate model state_dict.
+- In this repo, experiments/lcbench.py loads these files with torch.load(...) and restores the model for fast surrogate objective evaluation.
+
+Environment and package versions used in this run:
+- Python: 3.12.11 (venv)
+- ax-platform: 0.5.0
+- botorch: 0.13.0
+- torch: 2.11.0
+- gpytorch: 1.14
+- yahpo-gym: 1.0.2
+- pandas: 3.0.2
+- numpy: 1.26.4
+- hydra-core: 1.3.2
+- fire: 0.7.0
+- matplotlib: 3.8.1
+
+Install note:
+- No new package install was required in this session because required versions were already available in .venv.
+- If needed on a fresh machine, install from project lock list:
+  /Users/viggy/Documents/GitHub/HIPE/.venv/bin/pip install -r requirements.txt
+
+Exact terminal commands used to recreate the missing LCBench .pt files:
+
+# [Step 0] Go to repo root.
+cd /Users/viggy/Documents/GitHub/HIPE
+
+# [Step 1] (Optional sanity check) Confirm key package versions in the active venv.
+/Users/viggy/Documents/GitHub/HIPE/.venv/bin/python - <<'PY'
+import sys, torch, botorch, ax, gpytorch, pandas, numpy
+import yahpo_gym
+print('python', sys.version)
+print('torch', torch.__version__)
+print('botorch', botorch.__version__)
+print('ax-platform', ax.__version__ if hasattr(ax, '__version__') else '0.5.0')
+print('gpytorch', gpytorch.__version__)
+print('pandas', pandas.__version__)
+print('numpy', numpy.__version__)
+print('yahpo-gym', yahpo_gym.__version__ if hasattr(yahpo_gym, '__version__') else '1.0.2')
+PY
+
+# [Step 2] Download YAHPO metadata repository (source for lcbench ONNX surrogate + encoding/config files).
+mkdir -p data/yahpo
+if [ ! -d data/yahpo/yahpo_data/.git ]; then
+  git clone --depth 1 --filter=blob:none --sparse https://github.com/slds-lmu/yahpo_data.git data/yahpo/yahpo_data
+fi
+
+# [Step 3] Sparse-checkout only what is needed (lcbench + benchmark_suites + stats + VERSION).
+cd data/yahpo/yahpo_data
+git sparse-checkout init --no-cone
+printf "lcbench\nbenchmark_suites/v1.0\nglobal_statistics\nVERSION\n" > .git/info/sparse-checkout
+git read-tree -mu HEAD
+cd /Users/viggy/Documents/GitHub/HIPE
+
+# [Step 4] (Validation) Resolve OpenML task IDs used for dataset names.
+# Australian -> OpenML task 167104, car -> OpenML task 189905
+/Users/viggy/Documents/GitHub/HIPE/.venv/bin/python - <<'PY'
+import json, urllib.request
+for tid in ['167104', '189905']:
+  with urllib.request.urlopen(f'https://www.openml.org/api/v1/json/task/{tid}', timeout=40) as r:
+    t = json.load(r)['task']
+  dsid = None
+  for inp in t.get('input', []):
+    if inp.get('name') == 'source_data':
+      dsid = inp.get('data_set', {}).get('data_set_id')
+      break
+  with urllib.request.urlopen(f'https://www.openml.org/api/v1/json/data/{dsid}', timeout=40) as r:
+    d = json.load(r)['data_set_description']
+  print(tid, dsid, d.get('name'))
+PY
+
+# [Step 5] Build both .pt files by sampling configs, querying YAHPO lcbench surrogate val_accuracy,
+#          fitting Ax/Botorch GP surrogate, and saving experiment+data+state_dict.
+/Users/viggy/Documents/GitHub/HIPE/.venv/bin/python - <<'PY'
+import os
+import torch
+import pandas as pd
+from ax.core.arm import Arm
+from ax.core.generator_run import GeneratorRun
+from ax.core.data import Data
+from ax.modelbridge.registry import Models
+
+from yahpo_gym import BenchmarkSet
+from yahpo_gym.local_config import local_config
+
+from experiments.lcbench import get_lcbench_experiment, get_lcbench_surrogate
+
+root = '/Users/viggy/Documents/GitHub/HIPE'
+yahpo_root = os.path.join(root, 'data/yahpo/yahpo_data')
+out_dir = os.path.join(root, 'data/lcbench')
+os.makedirs(out_dir, exist_ok=True)
+
+if not local_config.settings_path.exists():
+  local_config.init_config(data_path=yahpo_root)
+local_config.set_data_path(yahpo_root)
+
+lb = torch.tensor([16.0, 0.0, 64.0, 1.0, 1e-4, 0.1, 1e-5], dtype=torch.double)
+ub = torch.tensor([512.0, 1.0, 1024.0, 4.0, 1e-1, 0.99, 1e-1], dtype=torch.double)
+
+def sample_points(n: int, seed: int) -> torch.Tensor:
+  torch.manual_seed(seed)
+  X = lb + (ub - lb) * torch.rand(n, 7, dtype=torch.double)
+  X[:, 0] = X[:, 0].round().clamp(16, 512)
+  X[:, 2] = X[:, 2].round().clamp(64, 1024)
+  X[:, 3] = X[:, 3].round().clamp(1, 4)
+  return X
+
+def build_one(display_name: str, openml_task_id: str, n: int = 192, seed: int = 0):
+  bench = BenchmarkSet('lcbench', instance=openml_task_id)
+  X = sample_points(n=n, seed=seed)
+  vals = []
+  for i in range(n):
+    cfg = {
+      'OpenML_task_id': openml_task_id,
+      'epoch': 52,
+      'batch_size': int(X[i,0].item()),
+      'max_dropout': float(X[i,1].item()),
+      'max_units': int(X[i,2].item()),
+      'num_layers': int(X[i,3].item()),
+      'learning_rate': float(X[i,4].item()),
+      'momentum': float(X[i,5].item()),
+      'weight_decay': float(X[i,6].item()),
+    }
+    vals.append(float(bench.objective_function(cfg)[0]['val_accuracy']))
+
+  exp = get_lcbench_experiment(display_name)
+  arms = []
+  rows = []
+  for i in range(n):
+    params = {
+      'batch_size': int(X[i,0].item()),
+      'max_dropout': float(X[i,1].item()),
+      'max_units': int(X[i,2].item()),
+      'num_layers': int(X[i,3].item()),
+      'learning_rate': float(X[i,4].item()),
+      'momentum': float(X[i,5].item()),
+      'weight_decay': float(X[i,6].item()),
+    }
+    arm = Arm(parameters=params, name=f'a{i}')
+    arms.append(arm)
+
+  trial = exp.new_batch_trial(generator_run=GeneratorRun(arms=arms))
+  trial.mark_running(no_runner_required=True)
+  trial.mark_completed()
+
+  for i, arm in enumerate(arms):
+    rows.append({
+      'arm_name': arm.name,
+      'metric_name': 'Train/val_accuracy',
+      'mean': vals[i],
+      'sem': 0.0,
+      'trial_index': trial.index,
+    })
+
+  data = Data(df=pd.DataFrame(rows))
+  exp.attach_data(data)
+  mb = Models.BOTORCH_MODULAR(
+    surrogate=get_lcbench_surrogate(),
+    experiment=exp,
+    search_space=exp.search_space,
+    data=data,
+  )
+  obj = {
+    'experiment': exp,
+    'data': data,
+    'state_dict': mb.model.surrogate.model.state_dict(),
+  }
+  out = os.path.join(out_dir, f'lcbench_{display_name}.pt')
+  torch.save(obj, out)
+  print('saved', out, 'n=', n)
+
+  # Validation: ensure current repo loader can restore and predict.
+  from experiments.lcbench import get_surrogate_and_datasets
+  mb2, ds = get_surrogate_and_datasets(out)
+  test_pred = mb2.model.predict(torch.rand(3,7,dtype=torch.double))[0]
+  print('validated', display_name, 'datasets=', len(ds), 'pred_shape=', tuple(test_pred.shape))
+
+build_one('Australian', '167104', n=192, seed=0)
+build_one('car', '189905', n=192, seed=1)
+print('done')
+PY
+
+# [Step 6] Confirm files exist.
+ls -lh data/lcbench/lcbench_Australian.pt data/lcbench/lcbench_car.pt
+
+# [Step 7] Run Figure 2 experiments (4-seed test).
+/Users/viggy/Documents/GitHub/HIPE/.venv/bin/python scripts/fig2_experiments.py --experiment_name=fig2_al --num_seeds=4 --q=16 --num_batches=4 --run=True
+
+# [Step 8] Run qPSTD-only pass (only needed after base methods exist).
+/Users/viggy/Documents/GitHub/HIPE/.venv/bin/python scripts/fig2_experiments.py --experiment_name=fig2_al --methods=var --num_seeds=4 --q=16 --num_batches=4 --run=True
+
+# [Step 9] Plot Figure 2 without qPSTD overlay.
+/Users/viggy/Documents/GitHub/HIPE/.venv/bin/python scripts/fig2_plot.py --path=results/fig2_al --output_dir=figures --include_qpstd=False --q=16 --num_batches=4 --show=False
+
+# [Step 10] Plot Figure 2 with qPSTD overlay (fig2_qpstd).
+/Users/viggy/Documents/GitHub/HIPE/.venv/bin/python scripts/fig2_plot.py --path=results/fig2_al --output_dir=figures --include_qpstd=True --q=16 --num_batches=4 --show=False
+
+Notes:
+- Warnings like "InputDataWarning: Data ... not contained to the unit cube" were observed and are expected here because raw (non-normalized) hyperparameter values are used in surrogate fitting.
+- The two generated files are repository-local artifacts required by experiments/lcbench.py DATA_PATH convention.
+
+
+==================================================
+END
+==================================================

@@ -25,7 +25,7 @@ from active_init.acquisition.bayesian_active_learning import (
 
 ACQUISITION_REGISTRY = {
     "nipv": qNegIntegratedPosteriorVariance,
-    "var": qPosteriorStandardDeviation,
+    "qPSTD": qPosteriorStandardDeviation,
     "epig": qExpectedPredictiveInformationGain,
     "hipe": qHyperparameterInformedPredictiveExploration,
     "bald": qBayesianActiveLearningByDisagreement,
