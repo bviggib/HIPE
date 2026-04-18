@@ -58,7 +58,7 @@ desktop.ini
 # Miscellaneous
 *.pkl
 *.h5
-*.csv
+# *.csv
 # *.json
 *.db
 *.out
