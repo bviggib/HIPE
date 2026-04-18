@@ -31,11 +31,14 @@ FIG2_QPSTD_METHODS = (
     # fig2_seq_qpstd change start
     "hipe",
     "bald",
-    "nipv",
-    "sobol",
+    # "nipv",
+    # "sobol",
     "random",
-    "qPSTD",
+    # "qPSTD",
+    # "qpstd_iter",
     "seq_PSTD_BALD",
+    "seq_pstdhipe11",
+    "seq_pstdhipe31",
     # fig2_seq_qpstd change end
 )
 

@@ -12,10 +12,12 @@ if str(ROOT) not in sys.path:
 import torch
 from botorch.optim import optimize_acqf
 from botorch.utils.sampling import draw_sobol_samples
+from botorch.utils.transforms import unnormalize
 from fire import Fire
 from omegaconf import OmegaConf
 
 from active_init.al import get_rmse_and_mll
+from active_init.init import initialize
 from active_init.registry.acquisition import get_acquisition_function
 from active_init.registry.model import get_model
 from experiments.evaluation import get_model_hyperparameters
@@ -46,18 +48,47 @@ FIG2_QPSTD_METHODS = (
     "sobol",
     "random",
     "qPSTD",
+    # "qpstd_iter",
     "seq_PSTD_BALD",
+    "seq_pstdhipe11",
+    "seq_pstdhipe31",
 )
 
 QPSTD_METHOD = "qPSTD"
 BALD_METHOD = "bald"
+HIPE_METHOD = "hipe"
+QPSTD_ITER_METHOD = "qpstd_iter"
 SEQ_PSTD_BALD_METHOD = "seq_PSTD_BALD"
+SEQ_PSTD_HIPE11_METHOD = "seq_pstdhipe11"
+SEQ_PSTD_HIPE31_METHOD = "seq_pstdhipe31"
 # fig2_seq_qpstd change end
 
 # fig2_resume_batches change start
 DEFAULT_MODEL_CONFIG = "fb"
 DEFAULT_ACQ_OPT_CONFIG = "default"
 # fig2_resume_batches change end
+
+
+def _seq_split_step(seq_method: str, num_batches: int) -> int:
+    if num_batches <= 1:
+        return 1
+    if seq_method == SEQ_PSTD_BALD_METHOD:
+        return math.ceil(num_batches / 2)
+    if seq_method == SEQ_PSTD_HIPE11_METHOD:
+        return max(1, min(num_batches - 1, math.ceil(num_batches / 2)))
+    if seq_method == SEQ_PSTD_HIPE31_METHOD:
+        return max(1, min(num_batches - 1, math.ceil(3 * num_batches / 4)))
+    raise ValueError(f"Unknown sequential method: {seq_method}")
+
+
+def _seq_methods_for(method: str) -> tuple[str, str] | None:
+    if method == SEQ_PSTD_BALD_METHOD:
+        return QPSTD_METHOD, BALD_METHOD
+    if method == SEQ_PSTD_HIPE11_METHOD:
+        return QPSTD_METHOD, HIPE_METHOD
+    if method == SEQ_PSTD_HIPE31_METHOD:
+        return QPSTD_METHOD, HIPE_METHOD
+    return None
 
 
 def _parse_name_from_objective_config(objective: str) -> str:
@@ -165,6 +196,213 @@ def _save_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=4)
+
+
+def _run_or_resume_qpstd_iter_seed(
+    *,
+    results_root: str,
+    experiment_name: str,
+    objective_key: str,
+    objective_save_name: str,
+    seed: int,
+    q: int,
+    num_batches: int,
+    run: bool,
+    resume_batches: bool,
+) -> bool:
+    total_budget = q * num_batches
+    seed_dir = (
+        Path(results_root)
+        / experiment_name
+        / objective_save_name
+        / QPSTD_ITER_METHOD
+        / f"seed{seed}"
+    )
+    init_file = seed_dir / "init.json"
+    al_file = seed_dir / "al.json"
+
+    if not run:
+        print(
+            "[dry-run qpstd_iter] "
+            f"objective={objective_key}, seed={seed}, total_budget={total_budget}, "
+            "iter_q=1"
+        )
+        return False
+
+    objective_cfg_path = Path("configs") / "objective" / f"{objective_key}.yaml"
+    init_cfg_path = Path("configs") / "init" / f"{QPSTD_METHOD}.yaml"
+    model_cfg_path = Path("configs") / "model" / f"{DEFAULT_MODEL_CONFIG}.yaml"
+    acq_opt_cfg_path = Path("configs") / "acq_opt" / f"{DEFAULT_ACQ_OPT_CONFIG}.yaml"
+    config_cfg_path = Path("configs") / "config.yaml"
+    if not (
+        objective_cfg_path.exists()
+        and init_cfg_path.exists()
+        and model_cfg_path.exists()
+        and acq_opt_cfg_path.exists()
+        and config_cfg_path.exists()
+    ):
+        raise FileNotFoundError(
+            "Missing config file(s) required to run qpstd_iter "
+            f"for objective={objective_key}, seed={seed}"
+        )
+
+    objective_cfg = OmegaConf.load(objective_cfg_path)
+    init_cfg = OmegaConf.load(init_cfg_path)
+    model_kwargs = OmegaConf.load(model_cfg_path)
+    acq_opt_kwargs = OmegaConf.to_container(OmegaConf.load(acq_opt_cfg_path), resolve=True)
+    config_cfg = OmegaConf.load(config_cfg_path)
+
+    objective = get_objective_function(objective_cfg, seed=seed)
+    num_test_points = int(config_cfg.evaluation.test_set_size)
+    acq_opt_kwargs["q"] = 1
+
+    used_resume = False
+    step_rmses: list[float] = []
+    step_mlls: list[float] = []
+    train_X: torch.Tensor
+    train_Y: torch.Tensor
+
+    if resume_batches and al_file.exists():
+        try:
+            al_metrics = _load_json(al_file)
+            train_data = al_metrics.get("TrainingData", {})
+            step_rmses = list(al_metrics.get("StepRMSE") or [])
+            step_mlls = list(al_metrics.get("StepMLL") or [])
+            train_X = torch.tensor(train_data["train_X"], dtype=torch.float64)
+            train_Y = torch.tensor(train_data["train_Y"], dtype=torch.float64)
+            if train_Y.ndim == 1:
+                train_Y = train_Y.unsqueeze(-1)
+            if (
+                len(step_rmses) == len(step_mlls)
+                and len(step_rmses) == train_X.shape[0]
+                and train_X.shape[0] == train_Y.shape[0]
+                and 0 < len(step_rmses) < total_budget
+            ):
+                used_resume = True
+                print(
+                    "[resume qpstd_iter] "
+                    f"objective={objective_key} (saved_as={objective_save_name}), "
+                    f"seed={seed}, steps={len(step_rmses)}->{total_budget}"
+                )
+            else:
+                step_rmses = []
+                step_mlls = []
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+            step_rmses = []
+            step_mlls = []
+
+    if not step_rmses:
+        center = unnormalize(
+            torch.full(torch.Size([1, objective.dim]), 0.5, dtype=torch.float64),
+            objective.bounds,
+        )
+        train_X = center.to(torch.float64)
+        train_Y = objective(train_X).unsqueeze(-1).to(torch.float64)
+
+        model, _ = get_model(
+            objective=objective,
+            train_X=train_X,
+            train_Y=train_Y,
+            model_kwargs=model_kwargs,
+            skip_kwargs=True,
+        )
+        rmse_val, mll_val = get_rmse_and_mll(
+            num_test_points=num_test_points,
+            model=model,
+            objective=objective,
+        )
+        step_rmses = [rmse_val]
+        step_mlls = [mll_val]
+
+    model, _ = get_model(
+        objective=objective,
+        train_X=train_X,
+        train_Y=train_Y,
+        model_kwargs=model_kwargs,
+        skip_kwargs=True,
+    )
+    init_kwargs_dict = OmegaConf.to_container(init_cfg, resolve=False)
+    while len(train_X) < total_budget:
+        acq_func = get_acquisition_function(
+            objective=objective,
+            acq_name=init_kwargs_dict["name"],
+            model=model,
+            acq_kwargs=dict(init_kwargs_dict.get("acq_kwargs") or {}),
+            bounds=objective.bounds,
+            mc_strategy=init_kwargs_dict.get("dist", None),
+        )
+        from gpytorch import settings
+
+        with settings.detach_test_caches(False):
+            candidates, _ = optimize_acqf(
+                acq_function=acq_func,
+                bounds=objective.bounds,
+                **acq_opt_kwargs,
+            )
+
+        new_X = candidates.detach().to(train_X)
+        new_Y = objective(new_X).unsqueeze(-1).to(train_Y)
+        train_X = torch.cat([train_X, new_X])
+        train_Y = torch.cat([train_Y, new_Y])
+
+        model, _ = get_model(
+            objective=objective,
+            train_X=train_X,
+            train_Y=train_Y,
+            model_kwargs=model_kwargs,
+            skip_kwargs=True,
+        )
+        rmse_val, mll_val = get_rmse_and_mll(
+            num_test_points=num_test_points,
+            model=model,
+            objective=objective,
+        )
+        step_rmses.append(rmse_val)
+        step_mlls.append(mll_val)
+
+    batch_indices = [(i + 1) * q - 1 for i in range(num_batches)]
+    batch_rmses = [step_rmses[idx] for idx in batch_indices]
+    batch_mlls = [step_mlls[idx] for idx in batch_indices]
+
+    noiseless_objective = deepcopy(objective)
+    noiseless_objective.objective.noise_std = 0
+    noiseless_objective.noise_std = 0
+    train_f = noiseless_objective(train_X).unsqueeze(-1)
+
+    al_metrics = {
+        "RMSE": batch_rmses,
+        "MLL": batch_mlls,
+        "StepRMSE": step_rmses,
+        "StepMLL": step_mlls,
+        "Hyperparameters": get_model_hyperparameters(model),
+        "TrainingData": {
+            "train_X": train_X.tolist(),
+            "train_Y": train_Y.tolist(),
+            "train_f": train_f.tolist(),
+        },
+        "IterMethod": {
+            "name": QPSTD_ITER_METHOD,
+            "base_method": QPSTD_METHOD,
+            "iter_q": 1,
+            "batch_q": q,
+            "num_batches": num_batches,
+            "total_budget": total_budget,
+        },
+    }
+    init_metrics = {
+        "Method": QPSTD_ITER_METHOD,
+        "BaseMethod": QPSTD_METHOD,
+        "RMSE": [batch_rmses[0]],
+        "MLL": [batch_mlls[0]],
+    }
+    _save_json(init_file, init_metrics)
+    _save_json(al_file, al_metrics)
+    print(
+        "[run qpstd_iter] "
+        f"objective={objective_key} (saved_as={objective_save_name}), "
+        f"seed={seed}, total_budget={total_budget}, iter_q=1"
+    )
+    return used_resume
 
 
 # fig2_resume_batches change start
@@ -352,6 +590,19 @@ def _run_or_resume_method_seed(
     run: bool,
     resume_batches: bool,
 ) -> bool:
+    if method == QPSTD_ITER_METHOD:
+        return _run_or_resume_qpstd_iter_seed(
+            results_root=results_root,
+            experiment_name=experiment_name,
+            objective_key=objective,
+            objective_save_name=objective_save_name,
+            seed=seed,
+            q=q,
+            num_batches=num_batches,
+            run=run,
+            resume_batches=resume_batches,
+        )
+
     if resume_batches and _continue_method_seed(
         results_root=results_root,
         experiment_name=experiment_name,
@@ -378,73 +629,249 @@ def _run_or_resume_method_seed(
 # fig2_resume_batches change end
 
 
-def _compose_seq_pstd_bald_seed(
+def _run_or_resume_switched_seq_seed(
     *,
     results_root: str,
     experiment_name: str,
+    objective_key: str,
     objective_save_name: str,
     seed: int,
+    q: int,
     num_batches: int,
+    seq_method: str,
+    phase1_method: str,
+    phase2_method: str,
+    split_step: int,
+    run: bool,
+    resume_batches: bool,
 ) -> bool:
-    qpstd_seed_dir = (
-        Path(results_root)
-        / experiment_name
-        / objective_save_name
-        / QPSTD_METHOD
-        / f"seed{seed}"
-    )
-    bald_seed_dir = (
-        Path(results_root)
-        / experiment_name
-        / objective_save_name
-        / BALD_METHOD
-        / f"seed{seed}"
-    )
+    if not run:
+        print(
+            "[dry-run seq-switched] "
+            f"objective={objective_key} (saved_as={objective_save_name}), seed={seed}, "
+            f"method={seq_method}, phase1={phase1_method}, phase2={phase2_method}, "
+            f"split_step={split_step}, q={q}, num_batches={num_batches}"
+        )
+        return False
+
     seq_seed_dir = (
         Path(results_root)
         / experiment_name
         / objective_save_name
-        / SEQ_PSTD_BALD_METHOD
+        / seq_method
         / f"seed{seed}"
     )
+    init_file = seq_seed_dir / "init.json"
+    al_file = seq_seed_dir / "al.json"
 
-    if not _is_seed_complete(qpstd_seed_dir, expected_steps=num_batches):
-        return False
-    if not _is_seed_complete(bald_seed_dir, expected_steps=num_batches):
-        return False
+    objective_cfg_path = Path("configs") / "objective" / f"{objective_key}.yaml"
+    phase1_cfg_path = Path("configs") / "init" / f"{phase1_method}.yaml"
+    phase2_cfg_path = Path("configs") / "init" / f"{phase2_method}.yaml"
+    model_cfg_path = Path("configs") / "model" / f"{DEFAULT_MODEL_CONFIG}.yaml"
+    acq_opt_cfg_path = Path("configs") / "acq_opt" / f"{DEFAULT_ACQ_OPT_CONFIG}.yaml"
+    config_cfg_path = Path("configs") / "config.yaml"
 
-    qpstd_init = _load_json(qpstd_seed_dir / "init.json")
-    qpstd_al = _load_json(qpstd_seed_dir / "al.json")
-    bald_al = _load_json(bald_seed_dir / "al.json")
+    if not (
+        objective_cfg_path.exists()
+        and phase1_cfg_path.exists()
+        and phase2_cfg_path.exists()
+        and model_cfg_path.exists()
+        and acq_opt_cfg_path.exists()
+        and config_cfg_path.exists()
+    ):
+        raise FileNotFoundError(
+            "Missing config file(s) required to run switched sequential method "
+            f"for objective={objective_key}, seed={seed}, method={seq_method}"
+        )
 
-    split_step = math.ceil(num_batches / 2)
-    qpstd_rmse = list(qpstd_al["RMSE"])
-    qpstd_mll = list(qpstd_al["MLL"])
-    bald_rmse = list(bald_al["RMSE"])
-    bald_mll = list(bald_al["MLL"])
+    objective_cfg = OmegaConf.load(objective_cfg_path)
+    phase1_cfg = OmegaConf.load(phase1_cfg_path)
+    phase2_cfg = OmegaConf.load(phase2_cfg_path)
+    model_kwargs = OmegaConf.load(model_cfg_path)
+    acq_opt_cfg = OmegaConf.load(acq_opt_cfg_path)
+    acq_opt_kwargs = OmegaConf.to_container(OmegaConf.load(acq_opt_cfg_path), resolve=True)
+    config_cfg = OmegaConf.load(config_cfg_path)
 
-    seq_rmse = qpstd_rmse[:split_step] + bald_rmse[split_step:num_batches]
-    seq_mll = qpstd_mll[:split_step] + bald_mll[split_step:num_batches]
+    objective = get_objective_function(objective_cfg, seed=seed)
+    acq_opt_kwargs["q"] = q
+    num_test_points = int(config_cfg.evaluation.test_set_size)
 
-    seq_al = dict(qpstd_al)
-    seq_al["RMSE"] = seq_rmse
-    seq_al["MLL"] = seq_mll
-    seq_al["SeqMethod"] = {
-        "name": SEQ_PSTD_BALD_METHOD,
-        "phase1_method": QPSTD_METHOD,
-        "phase2_method": BALD_METHOD,
+    used_resume = False
+    prev_al_metrics: dict = {}
+    rmses: list[float] = []
+    mlls: list[float] = []
+    train_X: torch.Tensor
+    train_Y: torch.Tensor
+
+    if resume_batches and al_file.exists():
+        try:
+            prev_al_metrics = _load_json(al_file)
+            prev_seq = prev_al_metrics.get("SeqMethod", {})
+            if (
+                prev_seq.get("name") == seq_method
+                and prev_seq.get("phase1_method") == phase1_method
+                and prev_seq.get("phase2_method") == phase2_method
+                and int(prev_seq.get("split_step", -1)) == split_step
+                and int(prev_seq.get("num_steps", -1)) == num_batches
+            ):
+                train_data = prev_al_metrics.get("TrainingData", {})
+                rmses = list(prev_al_metrics.get("RMSE") or [])
+                mlls = list(prev_al_metrics.get("MLL") or [])
+                train_X = torch.tensor(train_data["train_X"], dtype=torch.float64)
+                train_Y = torch.tensor(train_data["train_Y"], dtype=torch.float64)
+                if train_Y.ndim == 1:
+                    train_Y = train_Y.unsqueeze(-1)
+
+                expected_points = len(rmses) * q
+                if (
+                    len(rmses) == len(mlls)
+                    and 0 < len(rmses) < num_batches
+                    and train_X.shape[0] == train_Y.shape[0]
+                    and train_X.shape[0] == expected_points
+                ):
+                    used_resume = True
+                    print(
+                        "[resume seq-switched] "
+                        f"objective={objective_key} (saved_as={objective_save_name}), "
+                        f"seed={seed}, method={seq_method}, steps={len(rmses)}->{num_batches}"
+                    )
+                else:
+                    rmses = []
+                    mlls = []
+            else:
+                rmses = []
+                mlls = []
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+            rmses = []
+            mlls = []
+
+    if not rmses:
+        train_X, train_Y, _ = initialize(
+            objective=objective,
+            init_kwargs=phase1_cfg,
+            model_kwargs=model_kwargs,
+            acq_opt_kwargs=deepcopy(acq_opt_cfg),
+            batch_size=q,
+            include_center=True,
+            seed=seed,
+        )
+        model, _ = get_model(
+            objective=objective,
+            train_X=train_X,
+            train_Y=train_Y,
+            model_kwargs=model_kwargs,
+            skip_kwargs=True,
+        )
+        rmse_val, mll_val = get_rmse_and_mll(
+            num_test_points=num_test_points,
+            model=model,
+            objective=objective,
+        )
+        rmses = [rmse_val]
+        mlls = [mll_val]
+    else:
+        model, _ = get_model(
+            objective=objective,
+            train_X=train_X,
+            train_Y=train_Y,
+            model_kwargs=model_kwargs,
+            skip_kwargs=True,
+        )
+
+    while len(rmses) < num_batches:
+        current_step = len(rmses)
+        active_method = phase1_method if current_step < split_step else phase2_method
+        active_cfg = phase1_cfg if active_method == phase1_method else phase2_cfg
+        active_cfg_dict = OmegaConf.to_container(active_cfg, resolve=False)
+
+        if active_cfg_dict["name"] not in ["sobol", "random"]:
+            acq_func = get_acquisition_function(
+                objective=objective,
+                acq_name=active_cfg_dict["name"],
+                model=model,
+                acq_kwargs=dict(active_cfg_dict.get("acq_kwargs") or {}),
+                bounds=objective.bounds,
+                mc_strategy=active_cfg_dict.get("dist", None),
+            )
+            from gpytorch import settings
+
+            with settings.detach_test_caches(False):
+                candidates, _ = optimize_acqf(
+                    acq_function=acq_func,
+                    bounds=objective.bounds,
+                    **acq_opt_kwargs,
+                )
+        elif active_cfg_dict["name"] == "sobol":
+            candidates = draw_sobol_samples(
+                bounds=objective.bounds,
+                q=acq_opt_kwargs["q"],
+                n=1,
+            ).squeeze(0)
+        else:
+            candidates = torch.rand(
+                (acq_opt_kwargs["q"], objective.bounds.shape[-1])
+            ).to(objective.bounds.device)
+
+        new_X = candidates.detach().to(train_X)
+        new_Y = objective(new_X).unsqueeze(-1).to(train_Y)
+        train_X = torch.cat([train_X, new_X])
+        train_Y = torch.cat([train_Y, new_Y])
+
+        model, _ = get_model(
+            objective=objective,
+            train_X=train_X,
+            train_Y=train_Y,
+            model_kwargs=model_kwargs,
+            skip_kwargs=True,
+        )
+        rmse_val, mll_val = get_rmse_and_mll(
+            num_test_points=num_test_points,
+            model=model,
+            objective=objective,
+        )
+        rmses.append(rmse_val)
+        mlls.append(mll_val)
+
+    noiseless_objective = deepcopy(objective)
+    noiseless_objective.objective.noise_std = 0
+    noiseless_objective.noise_std = 0
+    train_f = noiseless_objective(train_X).unsqueeze(-1)
+
+    al_metrics = dict(prev_al_metrics) if prev_al_metrics else {}
+    al_metrics["RMSE"] = rmses
+    al_metrics["MLL"] = mlls
+    al_metrics["Hyperparameters"] = get_model_hyperparameters(model)
+    al_metrics["TrainingData"] = {
+        "train_X": train_X.tolist(),
+        "train_Y": train_Y.tolist(),
+        "train_f": train_f.tolist(),
+    }
+    al_metrics["SeqMethod"] = {
+        "name": seq_method,
+        "phase1_method": phase1_method,
+        "phase2_method": phase2_method,
         "split_step": split_step,
         "num_steps": num_batches,
+        "switched": True,
+    }
+    init_metrics = {
+        "Method": seq_method,
+        "Phase1Method": phase1_method,
+        "Phase2Method": phase2_method,
+        "SplitStep": split_step,
+        "RMSE": [rmses[0]],
+        "MLL": [mlls[0]],
     }
 
-    _save_json(seq_seed_dir / "init.json", qpstd_init)
-    _save_json(seq_seed_dir / "al.json", seq_al)
+    _save_json(init_file, init_metrics)
+    _save_json(al_file, al_metrics)
     print(
-        "[compose seq] "
-        f"objective={objective_save_name}, seed={seed}, "
-        f"split_step={split_step}, saved_method={SEQ_PSTD_BALD_METHOD}"
+        "[run seq-switched] "
+        f"objective={objective_key} (saved_as={objective_save_name}), "
+        f"seed={seed}, method={seq_method}, phase1={phase1_method}, "
+        f"phase2={phase2_method}, split_step={split_step}, num_batches={num_batches}"
     )
-    return True
+    return used_resume
 # fig2_seq_qpstd change end
 
 
@@ -510,7 +937,8 @@ def main(
                 objective_complete = False
 
                 # fig2_seq_qpstd change start
-                if method != SEQ_PSTD_BALD_METHOD:
+                seq_methods = _seq_methods_for(method)
+                if seq_methods is None:
                     used_resume = _run_or_resume_method_seed(
                         results_root=results_root,
                         experiment_name=experiment_name,
@@ -530,81 +958,27 @@ def main(
                         launched += 1
                     continue
 
-                qpstd_seed_dir = (
-                    Path(results_root)
-                    / experiment_name
-                    / objective_save_name
-                    / QPSTD_METHOD
-                    / f"seed{seed}"
-                )
-                bald_seed_dir = (
-                    Path(results_root)
-                    / experiment_name
-                    / objective_save_name
-                    / BALD_METHOD
-                    / f"seed{seed}"
-                )
-
-                if not (skip_completed and _is_seed_complete(qpstd_seed_dir, expected_steps=num_batches)):
-                    used_resume = _run_or_resume_method_seed(
-                        results_root=results_root,
-                        experiment_name=experiment_name,
-                        objective=objective,
-                        objective_save_name=objective_save_name,
-                        method=QPSTD_METHOD,
-                        q=q,
-                        budget=budget,
-                        num_batches=num_batches,
-                        seed=seed,
-                        run=run,
-                        resume_batches=resume_batches,
-                    )
-                    if used_resume:
-                        resumed += 1
-                    else:
-                        launched += 1
-                else:
-                    print(
-                        "[skip phase] "
-                        f"objective={objective} (saved_as={objective_save_name}), method={QPSTD_METHOD}, seed={seed}"
-                    )
-
-                if not (skip_completed and _is_seed_complete(bald_seed_dir, expected_steps=num_batches)):
-                    used_resume = _run_or_resume_method_seed(
-                        results_root=results_root,
-                        experiment_name=experiment_name,
-                        objective=objective,
-                        objective_save_name=objective_save_name,
-                        method=BALD_METHOD,
-                        q=q,
-                        budget=budget,
-                        num_batches=num_batches,
-                        seed=seed,
-                        run=run,
-                        resume_batches=resume_batches,
-                    )
-                    if used_resume:
-                        resumed += 1
-                    else:
-                        launched += 1
-                else:
-                    print(
-                        "[skip phase] "
-                        f"objective={objective} (saved_as={objective_save_name}), method={BALD_METHOD}, seed={seed}"
-                    )
-
-                composed = _compose_seq_pstd_bald_seed(
+                phase1_method, phase2_method = seq_methods
+                split_step = _seq_split_step(method, num_batches)
+                used_resume = _run_or_resume_switched_seq_seed(
                     results_root=results_root,
                     experiment_name=experiment_name,
+                    objective_key=objective,
                     objective_save_name=objective_save_name,
                     seed=seed,
+                    q=q,
                     num_batches=num_batches,
+                    seq_method=method,
+                    phase1_method=phase1_method,
+                    phase2_method=phase2_method,
+                    split_step=split_step,
+                    run=run,
+                    resume_batches=resume_batches,
                 )
-                if not composed:
-                    raise RuntimeError(
-                        "Unable to compose seq_PSTD_BALD seed after phase runs. "
-                        f"objective={objective}, seed={seed}"
-                    )
+                if used_resume:
+                    resumed += 1
+                else:
+                    launched += 1
                 # fig2_seq_qpstd change end
 
             if skip_completed and method_complete:

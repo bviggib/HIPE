@@ -1032,7 +1032,7 @@ def plot_rmse_nmll_over_time(
             labels[::-1],
             loc='lower center',  # Equivalent to loc=8
             ncol=len(methods),
-            fontsize=19,
+            fontsize=12,
             bbox_to_anchor=(0.5, -0.012) 
         )
         fig.tight_layout(rect=[-0.005, 0.05, 1.005, 1.01])

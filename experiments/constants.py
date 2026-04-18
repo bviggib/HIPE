@@ -5,7 +5,10 @@ COLORS = {
     "fb_random": "purple",
     "nipv": "forestgreen",
     "qPSTD": "teal",
+    "qpstd_iter": "cadetblue",
     "seq_PSTD_BALD": "steelblue",
+    "seq_pstdhipe11": "indianred",
+    "seq_pstdhipe31": "sienna",
     "hipe": "deeppink",
     "lhsbeta": "darkgoldenrod",
     "bald": "darkgoldenrod",
@@ -21,7 +24,10 @@ NAMES = {
     "nipv": "NIPV",
     "bald": "BALD",
     "qPSTD": "qPSTD",
+    "qpstd_iter": "qPSTD-Iter",
     "seq_PSTD_BALD": "Seq qPSTD->BALD",
+    "seq_pstdhipe11": "Seq qPSTD->HIPE (2/2)",
+    "seq_pstdhipe31": "Seq qPSTD->HIPE (3/1)",
     # fig2_qpstd change end
 }
 
@@ -59,7 +65,10 @@ AL_METHOD_ORDER = (
     "random",
     "sobol",
     "qPSTD",
+    "qpstd_iter",
     "seq_PSTD_BALD",
+    "seq_pstdhipe11",
+    "seq_pstdhipe31",
     "nipv",
     "bald",
     "hipe",

@@ -4,7 +4,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.png
-*.pdf
+# *.pdf
 *.sif
 # Virtual environment directories
 venv/
@@ -30,11 +30,11 @@ build/
 
 # Hydra output directories
 outputs/
-multirun/
-results/
+# multirun/
+# results/
 
 # PyTorch-specific files
-*.pt
+# *.pt
 *.pth
 *.ckpt
 
@@ -59,7 +59,7 @@ desktop.ini
 *.pkl
 *.h5
 *.csv
-*.json
+# *.json
 *.db
 *.out
 *.sh
