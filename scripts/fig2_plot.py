@@ -57,7 +57,7 @@ def main(
 
     os.makedirs(output_dir, exist_ok=True)
     methods = FIG2_QPSTD_METHODS if include_qpstd else FIG2_METHODS
-    file_name = "fig2_qpstd.pdf" if include_qpstd else "fig2.pdf"
+    file_name = "fig2_qpstd.png" if include_qpstd else "fig2.png"
     output_file = os.path.join(output_dir, file_name)
 
     plot_rmse_nmll_over_time(
