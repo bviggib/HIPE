@@ -20,9 +20,9 @@ from active_init.registry.model import get_model
 FIG2_OBJECTIVES = (
     "lcbench_australian_al",
     "lcbench_car_al",
-    "hartmann6",
-    "hartmann6_12",
-    "ishigami",
+    # "hartmann6",
+    # "hartmann6_12",
+    # "ishigami",
 )
 
 FIG2_METHODS = (
@@ -179,7 +179,7 @@ def _load_training_data(al_path: Path) -> tuple[torch.Tensor, torch.Tensor] | No
     return train_X, train_Y
 
 
-def _load_existing_smape(path: Path) -> tuple[list[float], list[float]]:
+def _load_existing_nrmse(path: Path) -> tuple[list[float], list[float]]:
     if not path.exists():
         return [], []
     try:
@@ -187,15 +187,15 @@ def _load_existing_smape(path: Path) -> tuple[list[float], list[float]]:
     except (OSError, json.JSONDecodeError):
         return [], []
 
-    smape = payload.get("sMAPE", {})
-    means = list(smape.get("Mean") or [])
-    maxes = list(smape.get("Max") or [])
+    nrmse = payload.get("NRMSE", {})
+    means = list(nrmse.get("Mean") or [])
+    maxes = list(nrmse.get("Max") or [])
     if len(means) != len(maxes):
         return [], []
     return means, maxes
 
 
-def _compute_smape(
+def _compute_nrmse(
     *,
     objective,
     model_kwargs,
@@ -205,7 +205,7 @@ def _compute_smape(
     test_f: torch.Tensor,
     q: int,
     num_batches: int,
-    smape_eps: float,
+    nrmse_eps: float,
     seed: int,
     resume_from: int = 0,
     existing_means: list[float] | None = None,
@@ -215,6 +215,9 @@ def _compute_smape(
     maxes = list(existing_maxes or [])
 
     torch.manual_seed(seed)
+
+    sigma = float(test_f.squeeze(-1).std().item())
+    denom = sigma + nrmse_eps
 
     total_points = train_X.shape[0]
     max_batches = min(num_batches, total_points // q)
@@ -236,11 +239,12 @@ def _compute_smape(
             pred = model.posterior(test_X).mean.squeeze(-1)
 
         actual = test_f.squeeze(-1)
-        denom = pred.abs() + actual.abs() + smape_eps
-        smape = (pred - actual).abs() / denom * 200.0
+        err = pred - actual
+        rmse = torch.sqrt(torch.mean(err**2))
+        max_abs = err.abs().max()
 
-        means.append(float(smape.mean().item()))
-        maxes.append(float(smape.max().item()))
+        means.append(float((rmse / denom).item()))
+        maxes.append(float((max_abs / denom).item()))
 
     return means, maxes
 
@@ -259,7 +263,7 @@ def main(
     resume_batches: bool | str = True,
     test_size: int = 10000,
     test_seed: int = 0,
-    smape_eps: float = 1e-8,
+    nrmse_eps: float = 1e-8,
     model_config: str = "fb",
     overwrite_test_set: bool | str = False,
     run: bool | str = True,
@@ -278,7 +282,7 @@ def main(
     seed_values = list(range(seed_start, seed_start + num_seeds))
 
     print(
-        "Computing sMAPE with q={}, num_batches={}, test_size={}, num_seeds={}".format(
+        "Computing NRMSE with q={}, num_batches={}, test_size={}, num_seeds={}".format(
             q, num_batches, test_size, num_seeds
         )
     )
@@ -335,7 +339,7 @@ def main(
                     )
                     continue
 
-                existing_means, existing_maxes = _load_existing_smape(mod_path)
+                existing_means, existing_maxes = _load_existing_nrmse(mod_path)
                 if skip_completed and len(existing_means) >= num_batches:
                     skipped += 1
                     continue
@@ -385,7 +389,12 @@ def main(
                     )
                     continue
 
-                means, maxes = _compute_smape(
+                print(
+                    "[run seed] "
+                    f"objective={objective_key} (saved_as={objective_save_name}), "
+                    f"method={method}, seed={seed}"
+                )
+                means, maxes = _compute_nrmse(
                     objective=objective,
                     model_kwargs=model_kwargs,
                     train_X=train_X,
@@ -394,7 +403,7 @@ def main(
                     test_f=test_f,
                     q=q,
                     num_batches=available_batches,
-                    smape_eps=smape_eps,
+                    nrmse_eps=nrmse_eps,
                     seed=seed,
                     resume_from=start_batch,
                     existing_means=existing_means,
@@ -408,7 +417,7 @@ def main(
                     "Seed": seed,
                     "BatchSize": q,
                     "NumBatches": available_batches,
-                    "sMAPE": {
+                    "NRMSE": {
                         "Mean": means,
                         "Max": maxes,
                     },
@@ -416,7 +425,7 @@ def main(
                         "path": os.path.relpath(test_set_path, seed_dir),
                         "size": test_size,
                         "seed": test_seed,
-                        "eps": smape_eps,
+                        "eps": nrmse_eps,
                     },
                 }
                 _save_json(mod_path, payload)

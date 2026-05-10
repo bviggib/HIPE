@@ -64,17 +64,17 @@ METRIC_SPECS = (
         "reduce": "mean",
     },
     {
-        "name": "sMAPEMean",
-        "label": "Mean sMAPE (%)",
+        "name": "NRMSE",
+        "label": "NRMSE",
         "file": "al_modobj.json",
-        "path": ("sMAPE", "Mean"),
+        "path": ("NRMSE", "Mean"),
         "reduce": "identity",
     },
     {
-        "name": "sMAPEMax",
-        "label": "Max sMAPE (%)",
+        "name": "MaxNormErr",
+        "label": "Max Norm Err",
         "file": "al_modobj.json",
-        "path": ("sMAPE", "Max"),
+        "path": ("NRMSE", "Max"),
         "reduce": "identity",
     },
 )
@@ -265,7 +265,7 @@ def main(
 
     os.makedirs(output_dir, exist_ok=True)
     methods = FIG2_QPSTD_METHODS if include_qpstd else FIG2_METHODS
-    file_name = "fig2_modobj_qpstd.png" if include_qpstd else "fig2_modobj.png"
+    file_name = "fig2_modobj_qpstd.pdf" if include_qpstd else "fig2_modobj.pdf"
     output_file = os.path.join(output_dir, file_name)
 
     plot_metrics_over_time(

@@ -1,17 +1,17 @@
 
 COLORS = {
     # fig2_qpstd change start
-    "fb_sobol": "dodgerblue",
-    "fb_random": "purple",
-    "nipv": "forestgreen",
-    "qPSTD": "teal",
-    "qpstd_iter": "cadetblue",
-    "seq_PSTD_BALD": "steelblue",
-    "seq_pstdhipe11": "indianred",
-    "seq_pstdhipe31": "sienna",
-    "hipe": "deeppink",
-    "lhsbeta": "darkgoldenrod",
-    "bald": "darkgoldenrod",
+    "fb_sobol": "#4E79A7",  # blue
+    "fb_random": "#BAB0AC",  # gray
+    "nipv": "#59A14F",  # green
+    "qPSTD": "#76B7B2",  # teal
+    "qpstd_iter": "#EDC948",  # yellow
+    "seq_PSTD_BALD": "#9C755F",  # brown
+    "seq_pstdhipe11": "#B07AA1",  # purple (highlight)
+    "seq_pstdhipe31": "#FF9DA7",  # pink
+    "hipe": "#E15759",  # red (highlight)
+    "lhsbeta": "#4E79A7",  # blue
+    "bald": "#F28E2B",  # orange (highlight)
     # fig2_qpstd change end
 }
 
